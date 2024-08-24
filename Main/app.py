@@ -17,7 +17,7 @@ def get_user_input():
 
 # Get URL from user input
 url = get_user_input()
-output_folder = urlparse(url).netloc
+output_folder = os.path.join("Extracted Website", urlparse(url).netloc)
 
 # Initialize a session
 session = requests.session()
@@ -167,9 +167,10 @@ class Extractor:
             return False
 
     def save_files(self, urls):
-        shutil.rmtree(os.path.join(workspace, output_folder), ignore_errors=True)
+        output_path = os.path.join(workspace, output_folder)
+        shutil.rmtree(output_path, ignore_errors=True)
         with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {executor.submit(self.download_file, url, os.path.join(workspace, output_folder, self.url_to_local_path(url))): url for url in urls}
+            futures = {executor.submit(self.download_file, url, os.path.join(output_path, self.url_to_local_path(url))): url for url in urls}
             for future in as_completed(futures):
                 future.result()
 
