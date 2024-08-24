@@ -17,13 +17,13 @@ def get_user_input():
 
 # Get URL from user input
 url = get_user_input()
-output_folder = os.path.join("Extracted Website", urlparse(url).netloc)
+netloc = urlparse(url).netloc
+output_folder = os.path.join("Extracted Website", netloc)
 
 # Initialize a session
-session = requests.session()
+session = requests.Session()
 use_tor_network = False  # Set this flag to True if you want to use Tor network
 if use_tor_network:
-    session.request = functools.partial(session.request, timeout=30)
     session.proxies = {'http': 'socks5h://localhost:9050',
                         'https': 'socks5h://localhost:9050'}
 
@@ -116,13 +116,15 @@ class Extractor:
             button_url = button.attrs.get('onclick')
             if button_url:
                 button_url = button_url.replace(' ', '')
-                button_url = button_url[button_url.find('location.href='):].replace('location.href=', '').strip("'\"`")
-                if button_url.startswith('/'):
-                    button_url = urljoin(self.url, button_url)
-                    new_url = self.url_to_local_path(button_url)
-                    if new_url:
-                        button['onclick'] = new_url
-                        urls.append(button_url.split('?')[0])
+                start = button_url.find('location.href=')
+                if start != -1:
+                    button_url = button_url[start + len('location.href='):].strip("'\"`")
+                    if button_url.startswith('/'):
+                        button_url = urljoin(self.url, button_url)
+                        new_url = self.url_to_local_path(button_url)
+                        if new_url:
+                            button['onclick'] = f"location.href='{new_url}'"
+                            urls.append(button_url.split('?')[0])
         return list(set(urls))
 
     def scrap_assets(self):
@@ -144,6 +146,8 @@ class Extractor:
         try:
             parsed_url = urlparse(url)
             path = parsed_url.path.lstrip('/')
+            if not path:
+                path = 'index.html'
             return os.path.join(*path.split('/'))
         except Exception as e:
             print(f"Error converting URL to local path: {e}")
@@ -167,15 +171,20 @@ class Extractor:
             return False
 
     def save_files(self, urls):
-        output_path = os.path.join(workspace, output_folder)
-        shutil.rmtree(output_path, ignore_errors=True)
+        output_path = os.path.join("Extracted Website", netloc)
+        if os.path.exists(output_path):
+            shutil.rmtree(output_path, ignore_errors=True)
+        os.makedirs(output_path, exist_ok=True)
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(self.download_file, url, os.path.join(output_path, self.url_to_local_path(url))): url for url in urls}
             for future in as_completed(futures):
-                future.result()
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"Error in file download: {e}")
 
     def save_html(self):
-        output_path = os.path.join(workspace, output_folder, 'index.html')
+        output_path = os.path.join("Extracted Website", netloc, 'index.html')
         prettyHTML = self.soup.prettify()
         try:
             with codecs.open(output_path, 'w', 'utf-8') as file:
