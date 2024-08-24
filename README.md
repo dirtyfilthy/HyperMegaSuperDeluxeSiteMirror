@@ -65,4 +65,4 @@ pip install requests beautifulsoup4
 
 ## License
 
-This project is licensed under the terms of the ![image](https://github.com/user-attachments/assets/4cad792d-8636-464a-ad4c-7a6b754a1a8a)
+This project is licensed under the terms of the [MIT License](https://opensource.org/licenses/MIT). See the `License` file for details.
