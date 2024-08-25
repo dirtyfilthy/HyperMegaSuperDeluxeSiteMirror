@@ -17,6 +17,9 @@ def get_user_input():
 
 # Get URL from user input
 url = get_user_input()
+
+# Define workspace for saving extracted files
+workspace = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', 'Extracted Website')
 output_folder = urlparse(url).netloc
 
 # Initialize a session
@@ -26,9 +29,6 @@ if use_tor_network:
     session.request = functools.partial(session.request, timeout=30)
     session.proxies = {'http': 'socks5h://localhost:9050',
                         'https': 'socks5h://localhost:9050'}
-
-# Define workspace from script location
-workspace = os.path.dirname(os.path.realpath(__file__))
 
 class Extractor:
     def __init__(self, url):
