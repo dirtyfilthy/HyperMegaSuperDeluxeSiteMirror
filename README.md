@@ -26,7 +26,7 @@ website-cloner/
 You can install the required libraries using pip:
 
 ```bash
-pip install requests beautifulsoup4
+pip install requests beautifulsoup4 cssutils selenium webdriver-manager urllib3
 ```
 
 ## Usage
