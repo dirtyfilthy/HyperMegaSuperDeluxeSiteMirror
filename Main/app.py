@@ -631,7 +631,7 @@ class ResourceDownloader:
 
 class CrawlScheduler:
     def __init__(self, root_url: str, output_dir: str, dbmgr: DBManager,
-                 fetcher: HTMLFetcher, linker: LinkExtractor, resdl: ResourceDownloader):
+                 fetcher: HTMLFetcher, linker: LinkExtractor, resdl: ResourceDownloader, excluded_urls: list|None):
         self.root_url = root_url
         self.root_netloc = urlparse(root_url).netloc
         self.output_dir = output_dir
@@ -639,7 +639,7 @@ class CrawlScheduler:
         self.fetcher = fetcher
         self.linker = linker
         self.resdl = resdl
-
+        self.excluded_urls = excluded_urls or []
         base_folder = os.path.join(output_dir, self.root_netloc)
         if os.path.exists(base_folder):
             logger.info(f"[Scheduler] Menghapus folder lama: {base_folder}")
@@ -705,6 +705,8 @@ class CrawlScheduler:
         except Exception as e:
             logger.warning(f"[Scheduler] Gagal parse sitemap {sitemap_url}: {e}")
             return []
+        
+    
 
     def run(self):
         logger.info("[Scheduler] Mulai proses crawling...")
@@ -750,6 +752,9 @@ class CrawlScheduler:
             logger.info(f"[Scheduler] Ditemukan {len(internal_links)} link internal di {url}")
 
             for link in internal_links:
+                if any(excluded_url in link for excluded_url in self.excluded_urls):
+                    logger.info(f"[Scheduler] Excluded URL: {link}")
+                    continue
                 self.dbmgr.add_url(link)
 
             soup = BeautifulSoup(html_text, "html.parser")
@@ -916,23 +921,24 @@ if __name__ == "__main__":
     parser.add_argument("url", help="URL root situs, misalnya: https://example.com")
     parser.add_argument("--output", "-o", default="mirrored_full_site",
                         help="Folder output (default: ./mirrored_full_site)")
-    parser.add_argument("--ignore_robots", action="store_true", default=False,
+    parser.add_argument("--ignore-robots", action="store_true", default=False,
                         help="Jika diset, abaikan rules di robots.txt.")
-    parser.add_argument("--no_ssl_verify", action="store_true", default=False,
+    parser.add_argument("--no-ssl-verify", action="store_true", default=False,
                         help="Jika diset, nonaktifkan verifikasi SSL.")
-    parser.add_argument("--max_workers", "-w", type=int, default=10,
+    parser.add_argument("--max-workers", "-w", type=int, default=10,
                         help="Jumlah worker untuk download resource statis (default: 10).")
+    parser.add_argument("--exclude", "-x", type=str, action="append", help="exclude URLS matching this substring")
     parser.add_argument("--timeout", "-t", type=float, default=15.0,
                         help="Timeout (detik) untuk setiap request HTTP (default: 15).")
-    parser.add_argument("--max_retries", "-r", type=int, default=5,
+    parser.add_argument("--max-retries", "-r", type=int, default=5,
                         help="Jumlah retry untuk request yang gagal (exponential backoff) (default: 5).")
     parser.add_argument("--delay", "-d", type=float, default=1.0,
                         help="Delay awal (detik) + jitter untuk retries & rate-limiting (default: 1).")
-    parser.add_argument("--user_agent", "-u", default="MegaMirrorBot/3.5",
+    parser.add_argument("--user-agent", "-u", type=str, default="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
                         help="User-Agent header yang dipakai (default: MegaMirrorBot/3.5).")
-    parser.add_argument("--force_render", action="store_true", default=False,
+    parser.add_argument("--force-render", action="store_true", default=False,
                         help="Jika diset, paksa gunakan Selenium Headless Chrome untuk merender halaman.")
-    parser.add_argument("--selenium_wait", type=float, default=2.0,
+    parser.add_argument("--selenium-wait", type=float, default=2.0,
                         help="Waktu tunggu (detik) agar JavaScript benar-benar selesai dieksekusi (default: 2).")
 
     args = parser.parse_args()
@@ -944,6 +950,7 @@ if __name__ == "__main__":
     max_workers = args.max_workers
     timeout = args.timeout
     max_retries = args.max_retries
+    exclude = args.exclude
     delay = args.delay
     user_agent = args.user_agent
     force_render = args.force_render
@@ -960,6 +967,7 @@ if __name__ == "__main__":
     logger.info(f"Ignore robots.txt  : {ignore_robots}")
     logger.info(f"Verify SSL         : {verify_ssl}")
     logger.info(f"Max workers        : {max_workers}")
+    logger.info(f"Exclude            : {", ".join(exclude) if exclude else "None"}")
     logger.info(f"Timeout (s)        : {timeout}")
     logger.info(f"Max retries        : {max_retries}")
     logger.info(f"Delay (s)          : {delay}")
