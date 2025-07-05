@@ -6,3 +6,4 @@ webdriver-manager
 urllib3 
 lxml
 undetected-chromedriver
+setuptools
