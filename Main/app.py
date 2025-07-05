@@ -268,7 +268,7 @@ class HTMLFetcher:
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--ignore-certificate-errors")
             driver_path = ChromeDriverManager().install()
-            self.driver = webdriver.Chrome(executable_path=driver_path, options=chrome_options)
+            self.driver = webdriver.Chrome(options=chrome_options)
             logger.info("[HTMLFetcher] Selenium Headless Chrome diinisialisasi.")
             return True
         except Exception as e:
@@ -667,8 +667,12 @@ class CrawlScheduler:
                     if not self.dbmgr.sitemap_exists(sitemap_link):
                         urls = self._parse_sitemap(sitemap_link)
                         for u in urls:
+                            if any((excluded_url in u) for excluded_url in self.excluded_urls):
+                                logger.info(f"[Scheduler] Excluded URL: {u}")
+                                continue
                             if is_same_domain(self.root_netloc, u):
                                 self.dbmgr.add_url(u)
+                                logger.info(f"[Scheduler] Added URL: {u}")
                         self.dbmgr.add_sitemap(sitemap_link)
         except Exception as e:
             logger.warning(f"[Scheduler] Gagal parse robots.txt {robots_url}: {e}")
@@ -677,8 +681,12 @@ class CrawlScheduler:
         if not self.dbmgr.sitemap_exists(sitemap_fallback):
             urls = self._parse_sitemap(sitemap_fallback)
             for u in urls:
+                if any((excluded_url in u) for excluded_url in self.excluded_urls):
+                    logger.info(f"[Scheduler] Excluded URL: {u}")
+                    continue
                 if is_same_domain(self.root_netloc, u):
                     self.dbmgr.add_url(u)
+                    logger.info(f"[Scheduler] Added URL: {u}")
             self.dbmgr.add_sitemap(sitemap_fallback)
 
         pending = self.dbmgr.get_pending_urls(limit=1000)
@@ -752,9 +760,12 @@ class CrawlScheduler:
             logger.info(f"[Scheduler] Ditemukan {len(internal_links)} link internal di {url}")
 
             for link in internal_links:
-                if any(excluded_url in link for excluded_url in self.excluded_urls):
+                logger.info(f"[Scheduler] Checking URL: {link}")
+                logger.info(f"[Scheduler] Excluded URLs: {self.excluded_urls}")
+                if any((excluded_url in link) for excluded_url in self.excluded_urls):
                     logger.info(f"[Scheduler] Excluded URL: {link}")
                     continue
+                logger.info(f"[Scheduler] Adding URL: {link}")
                 self.dbmgr.add_url(link)
 
             soup = BeautifulSoup(html_text, "html.parser")
@@ -927,7 +938,7 @@ if __name__ == "__main__":
                         help="Jika diset, nonaktifkan verifikasi SSL.")
     parser.add_argument("--max-workers", "-w", type=int, default=10,
                         help="Jumlah worker untuk download resource statis (default: 10).")
-    parser.add_argument("--exclude", "-x", type=str, action="append", help="exclude URLS matching this substring")
+    parser.add_argument("--exclude", "-x", action="append", help="exclude URLS matching this substring", nargs=1)
     parser.add_argument("--timeout", "-t", type=float, default=15.0,
                         help="Timeout (detik) untuk setiap request HTTP (default: 15).")
     parser.add_argument("--max-retries", "-r", type=int, default=5,
@@ -950,7 +961,7 @@ if __name__ == "__main__":
     max_workers = args.max_workers
     timeout = args.timeout
     max_retries = args.max_retries
-    exclude = args.exclude
+    exclude = [item for sublist in args.exclude for item in sublist]
     delay = args.delay
     user_agent = args.user_agent
     force_render = args.force_render
@@ -967,6 +978,7 @@ if __name__ == "__main__":
     logger.info(f"Ignore robots.txt  : {ignore_robots}")
     logger.info(f"Verify SSL         : {verify_ssl}")
     logger.info(f"Max workers        : {max_workers}")
+    print(exclude)
     logger.info(f"Exclude            : {", ".join(exclude) if exclude else "None"}")
     logger.info(f"Timeout (s)        : {timeout}")
     logger.info(f"Max retries        : {max_retries}")
@@ -1016,6 +1028,7 @@ if __name__ == "__main__":
         dbmgr=dbmgr,
         fetcher=fetcher,
         linker=linker,
+        excluded_urls=exclude,
         resdl=resdl
     )
 
