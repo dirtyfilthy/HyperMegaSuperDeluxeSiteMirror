@@ -4,20 +4,20 @@
 """
 app.py
 
-Versi “super-kompleks” dari SiteMirror, dengan perbaikan pada _parse_and_rewrite_css
-agar tidak memicu TypeError. Sekarang skrip dapat men‐crawl dan mirror seluruh halaman
-di domain tanpa terhenti hanya pada satu halaman.
+A "super-complex" version of SiteMirror, with improvements to _parse_and_rewrite_css
+so it doesn't trigger a TypeError. Now the script can crawl and mirror the entire site
+domain without stopping at just one page.
 
-Cara pakai (contoh):
+Usage (example):
     python app.py https://t2b.my.id/ \
         --output my_full_mirror \
         --max_workers 8 \
         --delay 0.5 \
         --force_render
 
-Catatan:
-- Jangan tambahkan “False” atau “True” setelah flag boolean; cukup tulis flag‐nya saja.
-- Di PowerShell, gunakan backtick (`) untuk line‐continuation jika ingin memecah argumen ke beberapa baris.
+Notes:
+- Do not add "False" or "True" after boolean flags; just write the flag itself.
+- In PowerShell, use backtick (`) for line-continuation if you want to split arguments across multiple lines.
 """
 
 import argparse
@@ -40,9 +40,10 @@ import requests
 from bs4 import BeautifulSoup
 import cssutils
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from selenium import webdriver
+import undetected_chromedriver as uc
 from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # ==============================================================================
 #                           GLOBAL CONFIGURATIONS
@@ -65,7 +66,7 @@ console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(log_formatter)
 logger.addHandler(console_handler)
 
-# File handler (DEBUG+), rotasi 5 × 5MB
+# File handler (DEBUG+), rotate 5 × 5MB
 file_handler = RotatingFileHandler(
     os.path.join(LOG_DIR, "site_mirror.log"),
     maxBytes=5 * 1024 * 1024,
@@ -76,7 +77,7 @@ file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(log_formatter)
 logger.addHandler(file_handler)
 
-# Supress cssutils verbose log
+# Suppress cssutils verbose log
 cssutils.log.setLevel(logging.ERROR)
 
 # ==============================================================================
@@ -170,7 +171,7 @@ class DBManager:
                 c.execute("INSERT OR IGNORE INTO urls(url, status) VALUES(?, 'pending')", (url,))
                 conn.commit()
             except Exception as e:
-                logger.error(f"[DB:add_url] Gagal insert URL {url}: {e}")
+                logger.error(f"[DB:add_url] Failed to insert URL {url}: {e}")
             finally:
                 conn.close()
 
@@ -191,7 +192,7 @@ class DBManager:
                 c.execute("UPDATE urls SET status='visited', last_fetched=CURRENT_TIMESTAMP WHERE url=?", (url,))
                 conn.commit()
             except Exception as e:
-                logger.error(f"[DB:mark_visited] Gagal update visited {url}: {e}")
+                logger.error(f"[DB:mark_visited] Failed to update visited {url}: {e}")
             finally:
                 conn.close()
 
@@ -212,7 +213,7 @@ class DBManager:
                 c.execute("INSERT OR IGNORE INTO resources(url, local_path) VALUES(?, ?)", (url, local_path))
                 conn.commit()
             except Exception as e:
-                logger.error(f"[DB:add_resource] Gagal insert resource {url}: {e}")
+                logger.error(f"[DB:add_resource] Failed to insert resource {url}: {e}")
             finally:
                 conn.close()
 
@@ -233,7 +234,7 @@ class DBManager:
                 c.execute("INSERT OR IGNORE INTO sitemap_urls(url) VALUES(?)", (url,))
                 conn.commit()
             except Exception as e:
-                logger.error(f"[DB:add_sitemap] Gagal insert sitemap {url}: {e}")
+                logger.error(f"[DB:add_sitemap] Failed to insert sitemap {url}: {e}")
             finally:
                 conn.close()
 
@@ -260,19 +261,25 @@ class HTMLFetcher:
 
     def _init_selenium(self) -> bool:
         try:
-            chrome_options = Options()
+            # Use undetected_chromedriver for better bot detection evasion
+            chrome_options = uc.ChromeOptions()
             chrome_options.add_argument("--headless")
             chrome_options.add_argument("--disable-gpu")
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--window-size=1920,1080")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--ignore-certificate-errors")
-            driver_path = ChromeDriverManager().install()
-            self.driver = webdriver.Chrome(options=chrome_options)
-            logger.info("[HTMLFetcher] Selenium Headless Chrome diinisialisasi.")
+            
+            # Set user agent
+            chrome_options.add_argument(f"--user-agent={self.user_agent}")
+            
+            # Create undetected Chrome driver
+            self.driver = uc.Chrome(options=chrome_options)
+            
+            logger.info("[HTMLFetcher] Undetected Chrome initialized successfully.")
             return True
         except Exception as e:
-            logger.warning(f"[HTMLFetcher] Gagal inisialisasi Selenium: {e} — akan pakai Requests saja.")
+            logger.warning(f"[HTMLFetcher] Failed to initialize undetected Chrome: {e} — will use Requests instead.")
             self.force_render = False
             return False
 
@@ -292,10 +299,10 @@ class HTMLFetcher:
             except requests.RequestException as e:
                 attempt += 1
                 sleep_time = backoff + random.uniform(0, 0.5)
-                logger.warning(f"[HTMLFetcher] Retry {attempt}/{self.max_retries} untuk {url}: {e} — delay {sleep_time:.2f}s")
+                logger.warning(f"[HTMLFetcher] Retry {attempt}/{self.max_retries} for {url}: {e} — delay {sleep_time:.2f}s")
                 time.sleep(sleep_time)
                 backoff *= 2
-        logger.error(f"[HTMLFetcher] Gagal fetch {url} setelah {self.max_retries} percobaan.")
+        logger.error(f"[HTMLFetcher] Failed to fetch {url} after {self.max_retries} attempts.")
         return None
 
     def fetch_static(self, url: str) -> (str, dict):
@@ -312,17 +319,51 @@ class HTMLFetcher:
 
     def fetch_rendered(self, url: str) -> (str, dict):
         try:
+            logger.info(f"[HTMLFetcher] Starting Selenium render for: {url}")
             self.driver.get(url)
+            logger.info(f"[HTMLFetcher] Page loaded, waiting for readyState to be 'complete'...")
+            
+            # Wait for document.readyState == 'complete'
+            WebDriverWait(self.driver, self.selenium_wait + 10).until(
+                lambda d: d.execute_script('return document.readyState') == 'complete'
+            )
+            logger.info(f"[HTMLFetcher] Document readyState is 'complete'")
+            
+            # Check if we're on a Cloudflare challenge page
+            page_title = self.driver.title
+            if "Just a moment" in page_title or "Checking your browser" in page_title:
+                logger.info(f"[HTMLFetcher] Detected Cloudflare challenge page, waiting longer for completion...")
+                # Wait longer for Cloudflare challenge to complete
+                time.sleep(10 + random.uniform(2, 5))
+                
+                # Check if challenge is still present
+                current_title = self.driver.title
+                if "Just a moment" in current_title or "Checking your browser" in current_title:
+                    logger.warning(f"[HTMLFetcher] Cloudflare challenge still present after extended wait")
+                else:
+                    logger.info(f"[HTMLFetcher] Cloudflare challenge appears to be completed, new title: {current_title}")
+            
+            # Additional sleep for JS-heavy sites (optional, can be tuned)
+            logger.info(f"[HTMLFetcher] Additional wait for JS execution: {self.selenium_wait + random.uniform(0, 0.5):.2f}s")
             time.sleep(self.selenium_wait + random.uniform(0, 0.5))
+            
+            logger.info(f"[HTMLFetcher] Capturing page source...")
             rendered_html = self.driver.page_source
+            logger.info(f"[HTMLFetcher] Page source captured, length: {len(rendered_html)} characters")
+            
+            # Log the final page title for debugging
+            final_title = self.driver.title
+            logger.info(f"[HTMLFetcher] Final page title: {final_title}")
+            
             data = {
                 "status_code": 200,
                 "content_type": "text/html; rendered",
                 "headers": {}
             }
+            logger.info(f"[HTMLFetcher] Selenium render completed successfully for: {url}")
             return rendered_html, data
         except Exception as e:
-            logger.warning(f"[HTMLFetcher] Selenium gagal render {url}: {e}")
+            logger.warning(f"[HTMLFetcher] Selenium failed to render {url}: {e}")
             return None, {}
 
     def fetch(self, url: str) -> (str, dict):
@@ -378,8 +419,8 @@ class LinkExtractor:
 
     def _extract_data_attrs(self, soup: BeautifulSoup, base_url: str) -> set:
         """
-        Iterasi manual semua tag → periksa tag.attrs (dict) → cari key yang diawali 'data-'.
-        Jika val tampak URL, normalisasi dan tambahkan.
+        Manually iterate all tags → check tag.attrs (dict) → look for keys starting with 'data-'.
+        If the value looks like a URL, normalize and add it.
         """
         links = set()
         for tag in soup.find_all():
@@ -484,10 +525,10 @@ class ResourceDownloader:
             except requests.RequestException as e:
                 attempt += 1
                 sleep_time = backoff + random.uniform(0, 0.5)
-                logger.warning(f"[ResDL] Retry {attempt}/{self.max_retries} untuk {url}: {e} — delay {sleep_time:.2f}s")
+                logger.warning(f"[ResDL] Retry {attempt}/{self.max_retries} for {url}: {e} — delay {sleep_time:.2f}s")
                 time.sleep(sleep_time)
                 backoff *= 2
-        logger.error(f"[ResDL] Gagal download {url} setelah {self.max_retries} percobaan.")
+        logger.error(f"[ResDL] Failed to download {url} after {self.max_retries} attempts.")
         return None
 
     def sanitize_path(self, url: str) -> (str, str):
@@ -526,7 +567,7 @@ class ResourceDownloader:
                 f.write(content)
             return full_path
         except Exception as e:
-            logger.error(f"[ResDL] Gagal simpan file {full_path}: {e}")
+            logger.error(f"[ResDL] Failed to save file {full_path}: {e}")
             return None
 
     def _parse_and_rewrite_css(self, css_bytes: bytes, css_url: str) -> bytes:
@@ -582,6 +623,7 @@ class ResourceDownloader:
         parsed = urlparse(abs_url)
         if parsed.scheme not in ["http", "https"]:
             return None
+        # Only download resources from the same domain (including scripts)
         if not is_same_domain(self.root_netloc, abs_url):
             return None
 
@@ -595,7 +637,7 @@ class ResourceDownloader:
 
         resp = self._retry_request("GET", abs_url)
         if not resp or not resp.content:
-            logger.warning(f"[ResDL] Gagal unduh resource {abs_url}")
+            logger.warning(f"[ResDL] Failed to download resource {abs_url}")
             return None
 
         ext = os.path.splitext(parsed.path)[1].lower()
@@ -642,7 +684,7 @@ class CrawlScheduler:
         self.excluded_urls = excluded_urls or []
         base_folder = os.path.join(output_dir, self.root_netloc)
         if os.path.exists(base_folder):
-            logger.info(f"[Scheduler] Menghapus folder lama: {base_folder}")
+            logger.info(f"[Scheduler] Removing old folder: {base_folder}")
             shutil.rmtree(base_folder)
         os.makedirs(base_folder, exist_ok=True)
 
@@ -654,7 +696,7 @@ class CrawlScheduler:
             rp = robotparser.RobotFileParser()
             rp.set_url(robots_url)
             rp.read()
-            logger.info(f"[Scheduler] robots.txt diambil dari {robots_url}")
+            logger.info(f"[Scheduler] robots.txt fetched from {robots_url}")
             robots_txt = requests.get(
                 robots_url,
                 timeout=self.fetcher.timeout,
@@ -675,7 +717,7 @@ class CrawlScheduler:
                                 logger.info(f"[Scheduler] Added URL: {u}")
                         self.dbmgr.add_sitemap(sitemap_link)
         except Exception as e:
-            logger.warning(f"[Scheduler] Gagal parse robots.txt {robots_url}: {e}")
+            logger.warning(f"[Scheduler] Failed to parse robots.txt {robots_url}: {e}")
 
         sitemap_fallback = urljoin(self.root_url, "/sitemap.xml")
         if not self.dbmgr.sitemap_exists(sitemap_fallback):
@@ -711,22 +753,22 @@ class CrawlScheduler:
             logger.info(f"[Scheduler] Parsed {len(urls)} URLs from sitemap {sitemap_url}")
             return urls
         except Exception as e:
-            logger.warning(f"[Scheduler] Gagal parse sitemap {sitemap_url}: {e}")
+            logger.warning(f"[Scheduler] Failed to parse sitemap {sitemap_url}: {e}")
             return []
         
     
 
     def run(self):
-        logger.info("[Scheduler] Mulai proses crawling...")
+        logger.info("[Scheduler] Starting crawl process...")
 
         while True:
             pending_list = self.dbmgr.get_pending_urls(limit=1)
             if not pending_list:
-                logger.info("[Scheduler] Semua URL sudah di-visit. Selesai.")
+                logger.info("[Scheduler] All URLs have been visited. Done.")
                 break
 
             url = pending_list[0]
-            logger.info(f"[Scheduler] Memproses URL: {url}")
+            logger.info(f"[Scheduler] Processing URL: {url}")
 
             parsed_robots = robotparser.RobotFileParser()
             parsed_robots.set_url(urljoin(self.root_url, "/robots.txt"))
@@ -735,7 +777,7 @@ class CrawlScheduler:
             except Exception:
                 pass
             if not parsed_robots.can_fetch(self.fetcher.user_agent, url) and not args.ignore_robots:
-                logger.warning(f"[Scheduler] Akses dilarang robots.txt: {url}")
+                logger.warning(f"[Scheduler] Access denied by robots.txt: {url}")
                 self.dbmgr.mark_visited(url)
                 continue
 
@@ -757,7 +799,7 @@ class CrawlScheduler:
 
             all_links = self.linker.extract(html_text, url)
             internal_links = set(filter(lambda u: is_same_domain(self.root_netloc, u), all_links))
-            logger.info(f"[Scheduler] Ditemukan {len(internal_links)} link internal di {url}")
+            logger.info(f"[Scheduler] Found {len(internal_links)} internal links in {url}")
 
             for link in internal_links:
                 logger.info(f"[Scheduler] Checking URL: {link}")
@@ -919,7 +961,7 @@ class CrawlScheduler:
 
         self.fetcher.shutdown()
         self.resdl.shutdown()
-        logger.info("[Scheduler] Semua proses selesai. Mirror berhasil!")
+        logger.info("[Scheduler] All processes finished. Mirror successful!")
 
 # ==============================================================================
 #                                MAIN SCRIPT
@@ -927,30 +969,32 @@ class CrawlScheduler:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="MegaMirror: Mirror sebuah situs (Static + JS rendered) secara komprehensif."
+        description="MegaMirror: Comprehensively mirror a site (Static + JS rendered)."
     )
-    parser.add_argument("url", help="URL root situs, misalnya: https://example.com")
+    parser.add_argument("url", help="Root site URL, e.g.: https://example.com")
     parser.add_argument("--output", "-o", default="mirrored_full_site",
-                        help="Folder output (default: ./mirrored_full_site)")
+                        help="Output folder (default: ./mirrored_full_site)")
     parser.add_argument("--ignore-robots", action="store_true", default=False,
-                        help="Jika diset, abaikan rules di robots.txt.")
+                        help="If set, ignore rules in robots.txt.")
     parser.add_argument("--no-ssl-verify", action="store_true", default=False,
-                        help="Jika diset, nonaktifkan verifikasi SSL.")
+                        help="If set, disable SSL verification.")
     parser.add_argument("--max-workers", "-w", type=int, default=10,
-                        help="Jumlah worker untuk download resource statis (default: 10).")
+                        help="Number of workers for downloading static resources (default: 10).")
     parser.add_argument("--exclude", "-x", action="append", help="exclude URLS matching this substring", nargs=1)
     parser.add_argument("--timeout", "-t", type=float, default=15.0,
-                        help="Timeout (detik) untuk setiap request HTTP (default: 15).")
+                        help="Timeout (seconds) for each HTTP request (default: 15).")
     parser.add_argument("--max-retries", "-r", type=int, default=5,
-                        help="Jumlah retry untuk request yang gagal (exponential backoff) (default: 5).")
+                        help="Number of retries for failed requests (exponential backoff) (default: 5).")
     parser.add_argument("--delay", "-d", type=float, default=1.0,
-                        help="Delay awal (detik) + jitter untuk retries & rate-limiting (default: 1).")
+                        help="Initial delay (seconds) + jitter for retries & rate-limiting (default: 1).")
     parser.add_argument("--user-agent", "-u", type=str, default="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
-                        help="User-Agent header yang dipakai (default: MegaMirrorBot/3.5).")
+                        help="User-Agent header to use (default: MegaMirrorBot/3.5).")
     parser.add_argument("--force-render", action="store_true", default=False,
-                        help="Jika diset, paksa gunakan Selenium Headless Chrome untuk merender halaman.")
+                        help="If set, force use of Selenium Headless Chrome to render pages.")
     parser.add_argument("--selenium-wait", type=float, default=2.0,
-                        help="Waktu tunggu (detik) agar JavaScript benar-benar selesai dieksekusi (default: 2).")
+                        help="Wait time (seconds) to ensure JavaScript is fully executed (default: 2).")
+    parser.add_argument("--fresh-start", action="store_true", default=False,
+                        help="If set, remove the output directory before starting (fresh start).")
 
     args = parser.parse_args()
 
@@ -961,25 +1005,33 @@ if __name__ == "__main__":
     max_workers = args.max_workers
     timeout = args.timeout
     max_retries = args.max_retries
-    exclude = [item for sublist in args.exclude for item in sublist]
+    exclude = args.exclude or []
+    exclude = [item for sublist in exclude for item in sublist]
     delay = args.delay
     user_agent = args.user_agent
     force_render = args.force_render
     selenium_wait = args.selenium_wait
+    fresh_start = args.fresh_start
 
-    # Validasi URL
+    # Validate URL
     if not root_url.startswith(("http://", "https://")):
-        logger.error("URL harus diawali dengan 'http://' atau 'https://'.")
+        logger.error("URL must start with 'http://' or 'https://'.")
         sys.exit(1)
 
+    # Fresh start: remove output directory if it exists
+    if fresh_start and os.path.exists(output_dir):
+        logger.info(f"Fresh start requested. Removing output directory: {output_dir}")
+        shutil.rmtree(output_dir)
+
     logger.info("================================================================================")
-    logger.info(f"MegaMirror d i m u l a i : {root_url}")
+    logger.info(f"MegaMirror s t a r t e d : {root_url}")
     logger.info(f"Output folder      : {output_dir}")
+    logger.info(f"Fresh start        : {fresh_start}")
     logger.info(f"Ignore robots.txt  : {ignore_robots}")
     logger.info(f"Verify SSL         : {verify_ssl}")
     logger.info(f"Max workers        : {max_workers}")
     print(exclude)
-    logger.info(f"Exclude            : {", ".join(exclude) if exclude else "None"}")
+    logger.info(f"Exclude            : {', '.join(exclude) if exclude else 'None'}")
     logger.info(f"Timeout (s)        : {timeout}")
     logger.info(f"Max retries        : {max_retries}")
     logger.info(f"Delay (s)          : {delay}")
@@ -991,10 +1043,10 @@ if __name__ == "__main__":
     os.makedirs(output_dir, exist_ok=True)
     db_path = os.path.join(output_dir, "mirror.db")
 
-    # Inisialisasi DBManager
+    # Initialize DBManager
     dbmgr = DBManager(db_path)
 
-    # Inisialisasi komponen
+    # Initialize components
     fetcher = HTMLFetcher(
         user_agent=user_agent,
         timeout=timeout,
@@ -1032,11 +1084,11 @@ if __name__ == "__main__":
         resdl=resdl
     )
 
-    # Seed (tambahkan root_url dan sitemap jika ada)
+    # Seed (add root_url and sitemap if available)
     scheduler.seed()
 
-    # Jalankan crawling hingga selesai
+    # Run crawling until done
     scheduler.run()
 
-    logger.info("MegaMirror: Proses mirror selesai. Periksa hasil di folder output.")
+    logger.info("MegaMirror: Mirroring process complete. Check the output folder.")
     sys.exit(0)
