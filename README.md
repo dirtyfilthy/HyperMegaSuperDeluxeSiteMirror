@@ -111,7 +111,7 @@ SiteMirror/
    Install dependencies with:
 
    ```bash
-   pip install requests beautifulsoup4 cssutils selenium webdriver-manager urllib3 lxml
+   ./install_deps.sh
    ```
 
    * `requests`
@@ -138,22 +138,16 @@ SiteMirror/
    └── License
    ```
 
-   Navigate into the `Main` folder before running the script.
+  
 
 ---
 
 ## Usage
 
-### 1. Open a Terminal / PowerShell
+### 1. Basic One-Line Command
 
 ```bash
-cd path/to/SiteMirror/Main
-```
-
-### 2. Basic One-Line Command
-
-```bash
-python app.py https://t2b.my.id/ --output my_full_mirror --max_workers 8 --delay 0.5 --force_render
+./run_app.sh https://t2b.my.id/ --output my_full_mirror --max-workers 8 --delay 0.5 --force-render
 ```
 
 Description of arguments:
